@@ -1,8 +1,22 @@
 # oom-postmortem
 
+[![CI](https://github.com/zhuhroscar-tech/oom-postmortem/actions/workflows/ci.yml/badge.svg)](https://github.com/zhuhroscar-tech/oom-postmortem/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/zhuhroscar-tech/oom-postmortem?include_prereleases&label=release)](https://github.com/zhuhroscar-tech/oom-postmortem/releases)
+![Linux](https://img.shields.io/badge/platform-Linux-111111?logo=linux)
+
 Determine which of several distinct OOM mechanisms killed a process on
 Linux — instead of manually correlating `journalctl -k`, `journalctl -u
 systemd-oomd`, and cgroup `memory.events` by hand.
+
+## Simple explanation
+
+When a program on a Linux server gets suddenly killed for using too
+much memory, there are actually three different systems that could
+have done it, and each one leaves evidence in a different log file.
+This tool checks all three places and tells you in plain language which
+one actually killed your process and why, so you fix the real cause
+instead of guessing. It's read-only — it never kills a process or
+changes any memory setting.
 
 ## The problem
 
