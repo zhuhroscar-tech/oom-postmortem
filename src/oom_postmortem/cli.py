@@ -7,6 +7,7 @@ import sys
 
 from . import __version__
 from .core import diagnose_host, MECHANISM_NONE_FOUND
+from .style import print_fields, resolve_style, status_headline
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,25 +28,29 @@ def build_parser() -> argparse.ArgumentParser:
              "e.g. '1 hour ago', '2026-09-10 08:00:00'). Default: entire available journal.",
     )
     p.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    p.add_argument("--no-color", action="store_true", help="Disable colored output.")
     return p
 
 
-def _print_text(report) -> None:
-    print(f"Mechanism: {report.mechanism}")
+def _print_text(report, style) -> None:
+    level = "ok" if report.mechanism == MECHANISM_NONE_FOUND else "fail"
+    print(status_headline(style, level, report.mechanism))
     print(report.explanation)
     if report.kernel_events:
         print("\nKernel OOM killer victims:")
+        rows = []
         for e in report.kernel_events:
             adj = f" oom_score_adj={e.oom_score_adj}" if e.oom_score_adj is not None else ""
-            print(f"  pid {e.pid} ({e.comm}){adj}")
+            rows.append((f"pid {e.pid}", f"{e.comm}{adj}"))
+        print_fields(rows)
     if report.oomd_events:
         print("\nsystemd-oomd kills:")
         for e in report.oomd_events:
             print(f"  {e.unit_or_cgroup}")
     if report.cgroup_events:
         print("\ncgroups with oom_kill counters incremented:")
-        for e in report.cgroup_events:
-            print(f"  {e.cgroup_path}: oom_kill={e.oom_kill_count}")
+        rows = [(e.cgroup_path, f"oom_kill={e.oom_kill_count}") for e in report.cgroup_events]
+        print_fields(rows)
 
 
 def main(argv=None) -> int:
@@ -55,7 +60,8 @@ def main(argv=None) -> int:
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))
     else:
-        _print_text(report)
+        style = resolve_style(no_color_flag=args.no_color)
+        _print_text(report, style)
 
     if report.mechanism == MECHANISM_NONE_FOUND:
         return 0
