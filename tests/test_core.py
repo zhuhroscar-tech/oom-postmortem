@@ -96,6 +96,14 @@ def test_parse_memory_events_missing_key():
     assert parse_memory_events("low 0\nhigh 0\n") is None
 
 
+def test_parse_memory_events_malformed_value_returns_none():
+    # A corrupted/truncated cgroup memory.events file should not crash the
+    # tool -- the oom_kill counter must be a valid integer, and if it isn't
+    # (disk corruption, partial read, unexpected kernel format change) the
+    # parser must degrade to None rather than raising.
+    assert parse_memory_events("oom_kill not-a-number\n") is None
+
+
 def test_find_cgroup_oom_events_filters_zero_counts():
     def fake_runner(cmd, timeout=15):
         if cmd[0] == "find":
