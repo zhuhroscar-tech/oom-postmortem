@@ -51,6 +51,8 @@ recur.
 
 ## What this does
 
+![oom-postmortem example output](docs/images/example-output.png)
+
 ```
 $ oom-postmortem --since "1 hour ago"
 
