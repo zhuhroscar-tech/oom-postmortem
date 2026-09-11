@@ -62,3 +62,22 @@ def test_since_passed_through(monkeypatch):
     monkeypatch.setattr("oom_postmortem.cli.diagnose_host", fake_diagnose)
     main(["--since", "1 hour ago"])
     assert captured["since"] == "1 hour ago"
+
+
+def test_text_output_prints_oomd_and_cgroup_sections(monkeypatch, capsys):
+    from oom_postmortem.core import OomdEvent, CgroupOomEvent, MECHANISM_SYSTEMD_OOMD
+
+    report = OomPostmortemReport(
+        mechanism=MECHANISM_SYSTEMD_OOMD,
+        explanation="oomd explanation",
+        oomd_events=[OomdEvent(unit_or_cgroup="myservice.service", raw_line="raw")],
+        cgroup_events=[CgroupOomEvent(cgroup_path="/sys/fs/cgroup/x", oom_kill_count=3)],
+    )
+    monkeypatch.setattr("oom_postmortem.cli.diagnose_host", lambda since: report)
+    rc = main(["--no-color"])
+    out = capsys.readouterr().out
+    assert "systemd-oomd kills" in out
+    assert "myservice.service" in out
+    assert "oom_kill counters" in out
+    assert "oom_kill=3" in out
+    assert rc == 2

@@ -1,3 +1,5 @@
+import subprocess
+
 from oom_postmortem.core import (
     MECHANISM_CGROUP_LIMIT,
     MECHANISM_KERNEL_OOM,
@@ -11,6 +13,7 @@ from oom_postmortem.core import (
     parse_kernel_oom_journal,
     parse_memory_events,
     parse_oomd_journal,
+    run,
 )
 
 
@@ -171,3 +174,48 @@ def test_diagnose_host_integration():
 
     report = diagnose_host(runner=fake_runner)
     assert report.mechanism == MECHANISM_KERNEL_OOM
+
+
+def test_run_returns_stdout_on_success(monkeypatch):
+    class FakeResult:
+        stdout = "hello\n"
+
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: FakeResult()
+    )
+    assert run(["echo", "hi"]) == "hello\n"
+
+
+def test_run_returns_empty_on_missing_binary(monkeypatch):
+    def raise_oserror(*a, **k):
+        raise OSError("no such file")
+
+    monkeypatch.setattr(subprocess, "run", raise_oserror)
+    assert run(["definitely-not-a-real-binary"]) == ""
+
+
+def test_run_returns_empty_on_subprocess_error(monkeypatch):
+    def raise_timeout(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="journalctl", timeout=15)
+
+    monkeypatch.setattr(subprocess, "run", raise_timeout)
+    assert run(["journalctl"], timeout=15) == ""
+
+
+def test_find_cgroup_oom_events_skips_blank_lines():
+    def fake_runner(cmd, timeout=15):
+        if cmd[0] == "find":
+            return "\n/sys/fs/cgroup/system.slice/a.service/memory.events\n\n"
+        if cmd[0] == "cat":
+            return MEMORY_EVENTS_SAMPLE
+        return ""
+
+    events = find_cgroup_oom_events(runner=fake_runner)
+    assert len(events) == 1
+
+
+def test_find_cgroup_oom_events_no_matches():
+    def fake_runner(cmd, timeout=15):
+        return ""
+
+    assert find_cgroup_oom_events(runner=fake_runner) == []
