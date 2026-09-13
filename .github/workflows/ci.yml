@@ -46,8 +46,8 @@ jobs:
       - name: Build a standalone .pyz (zipapp)
         run: |
           python -m pip install . --target build/pyz_root
+          printf 'from oom_postmortem.cli import main\nif __name__ == "__main__":\n    raise SystemExit(main())\n' > build/pyz_root/__main__.py
           python -m zipapp build/pyz_root \
-            --main "oom_postmortem.cli:main" \
             --output dist/oom-postmortem.pyz \
             --python "/usr/bin/env python3"
       - name: Smoke-test the .pyz on this Linux runner
@@ -55,6 +55,16 @@ jobs:
           python3 dist/oom-postmortem.pyz --version
           sudo python3 dist/oom-postmortem.pyz --json > /tmp/op.json || true
           python3 -m json.tool < /tmp/op.json > /dev/null
+          # Regression check: the .pyz's exit code must reflect the real
+          # command result, not always be 0 (zipapp's --main template
+          # omits sys.exit(), which previously made every .pyz invocation
+          # report success regardless of actual findings/errors). An
+          # unrecognized flag is a deterministic nonzero (argparse error) case.
+          set +e
+          python3 dist/oom-postmortem.pyz --bogus-flag-xyz > /dev/null 2>&1
+          bogus_code=$?
+          set -e
+          test "$bogus_code" -ne 0
       - name: Generate checksums
         run: |
           cd dist
