@@ -87,7 +87,7 @@ pip install oom-postmortem
 Or run the standalone zipapp with no install:
 
 ```bash
-curl -LO https://github.com/zhuhroscar-tech/oom-postmortem/releases/download/v0.1.0/oom-postmortem.pyz
+curl -LO https://github.com/zhuhroscar-tech/oom-postmortem/releases/latest/download/oom-postmortem.pyz
 python3 oom-postmortem.pyz --version
 ```
 
