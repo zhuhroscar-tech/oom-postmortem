@@ -6,6 +6,7 @@ from oom_postmortem.cli import main
 from oom_postmortem.core import (
     KernelOomEvent,
     OomPostmortemReport,
+    MECHANISM_DIAGNOSTIC_FAILED,
     MECHANISM_KERNEL_OOM,
     MECHANISM_NONE_FOUND,
 )
@@ -50,6 +51,33 @@ def test_none_found_returns_zero(monkeypatch, capsys):
     )
     rc = main([])
     assert rc == 0
+
+
+def test_diagnostic_failed_returns_three_and_warn_level(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "oom_postmortem.cli.diagnose_host",
+        lambda since: OomPostmortemReport(
+            mechanism=MECHANISM_DIAGNOSTIC_FAILED, explanation="journal unreadable"
+        ),
+    )
+    rc = main(["--no-color"])
+    out = capsys.readouterr().out
+    assert "diagnostic_failed" in out
+    assert "journal unreadable" in out
+    assert rc == 3
+
+
+def test_diagnostic_failed_json_output(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "oom_postmortem.cli.diagnose_host",
+        lambda since: OomPostmortemReport(
+            mechanism=MECHANISM_DIAGNOSTIC_FAILED, explanation="journal unreadable"
+        ),
+    )
+    rc = main(["--json"])
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed["mechanism"] == MECHANISM_DIAGNOSTIC_FAILED
+    assert rc == 3
 
 
 def test_since_passed_through(monkeypatch):

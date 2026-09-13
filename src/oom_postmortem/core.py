@@ -52,6 +52,7 @@ MECHANISM_KERNEL_OOM = "kernel_oom"
 MECHANISM_SYSTEMD_OOMD = "systemd_oomd"
 MECHANISM_CGROUP_LIMIT = "cgroup_memory_limit"
 MECHANISM_NONE_FOUND = "no_oom_kill_found"
+MECHANISM_DIAGNOSTIC_FAILED = "diagnostic_failed"
 
 MECHANISM_EXPLANATIONS = {
     MECHANISM_KERNEL_OOM: (
@@ -79,16 +80,38 @@ MECHANISM_EXPLANATIONS = {
         "found in the inspected window/target. The process may have exited "
         "for a different reason (crash, manual kill, normal exit)."
     ),
+    MECHANISM_DIAGNOSTIC_FAILED: (
+        "Could not reliably determine whether an OOM kill occurred: one or "
+        "more underlying reads (journalctl -k, journalctl -u systemd-oomd, "
+        "or the cgroupfs memory.events scan) failed -- most commonly because "
+        "the current user lacks permission to read the systemd journal (not "
+        "a member of the 'systemd-journal'/'adm' group; try running as root "
+        "or via sudo) or /sys/fs/cgroup could not be walked. This is NOT a "
+        "confirmed 'no OOM kill happened' result -- it means the check "
+        "itself could not run to completion."
+    ),
 }
 
 
-def run(cmd: list, timeout: int = 15) -> str:
-    """Run a read-only subprocess command, returning stdout (empty on error)."""
+def run(cmd: list, timeout: int = 15) -> Optional[str]:
+    """Run a read-only subprocess command, returning stdout.
+
+    Returns None (not "") when the command could not be run or exited
+    non-zero -- distinct from a real empty result -- so callers can tell
+    "this read genuinely found nothing" apart from "this read failed
+    (permission denied, missing binary, timeout)". Journal-reading
+    commands routinely fail with a nonzero exit and an empty stdout when
+    the caller lacks permission to read the systemd journal; treating
+    that the same as "no events" would silently misreport an
+    undetermined result as a confirmed clean one.
+    """
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
-        return result.stdout or ""
     except (OSError, subprocess.SubprocessError):
-        return ""
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout or ""
 
 
 _KERNEL_OOM_RE = re.compile(
@@ -124,11 +147,17 @@ def parse_kernel_oom_journal(text: str) -> list:
     return events
 
 
-def get_kernel_oom_events(since: Optional[str] = None, runner=run) -> list:
+def get_kernel_oom_events(since: Optional[str] = None, runner=run) -> tuple:
+    """Returns (events, ok) -- ok is False when the underlying `journalctl -k`
+    read itself failed (missing binary, permission denied, timeout), as
+    opposed to running successfully and finding zero kernel OOM lines."""
     cmd = ["journalctl", "-k", "--no-pager", "-o", "short-iso"]
     if since:
         cmd += ["--since", since]
-    return parse_kernel_oom_journal(runner(cmd))
+    text = runner(cmd)
+    if text is None:
+        return [], False
+    return parse_kernel_oom_journal(text), True
 
 
 _OOMD_KILL_RE = re.compile(r"Killed (\S+) due to memory pressure", re.IGNORECASE)
@@ -150,11 +179,16 @@ def parse_oomd_journal(text: str) -> list:
     return events
 
 
-def get_oomd_events(since: Optional[str] = None, runner=run) -> list:
+def get_oomd_events(since: Optional[str] = None, runner=run) -> tuple:
+    """Returns (events, ok) -- ok is False when the underlying
+    `journalctl -u systemd-oomd` read itself failed."""
     cmd = ["journalctl", "-u", "systemd-oomd", "--no-pager", "-o", "short-iso"]
     if since:
         cmd += ["--since", since]
-    return parse_oomd_journal(runner(cmd))
+    text = runner(cmd)
+    if text is None:
+        return [], False
+    return parse_oomd_journal(text), True
 
 
 @dataclass
@@ -175,21 +209,32 @@ def parse_memory_events(text: str) -> Optional[int]:
     return None
 
 
-def find_cgroup_oom_events(cgroup_root: str = "/sys/fs/cgroup", runner=run) -> list:
+def find_cgroup_oom_events(cgroup_root: str = "/sys/fs/cgroup", runner=run) -> tuple:
     """Walk cgroupfs for memory.events files reporting a nonzero oom_kill
     counter. Uses `find` + reading each file via the runner so this stays
-    testable without real filesystem access."""
+    testable without real filesystem access.
+
+    Returns (events, ok) -- ok is False when the `find` scan itself failed
+    (e.g. /sys/fs/cgroup unreadable). A per-file `cat` failure (a cgroup
+    that disappeared between `find` and `cat`, a genuinely transient race)
+    is not treated as a global failure -- that file is just skipped, since
+    `find` having succeeded already establishes the scan ran.
+    """
     out = runner(["find", cgroup_root, "-name", "memory.events"])
+    if out is None:
+        return [], False
     events = []
     for path in out.splitlines():
         path = path.strip()
         if not path:
             continue
         content = runner(["cat", path])
+        if content is None:
+            continue
         count = parse_memory_events(content)
         if count:
             events.append(CgroupOomEvent(cgroup_path=path, oom_kill_count=count))
-    return events
+    return events, True
 
 
 @dataclass
@@ -222,11 +267,21 @@ def diagnose(
     kernel_events: list,
     oomd_events: list,
     cgroup_events: list,
+    all_sources_ok: bool = True,
 ) -> OomPostmortemReport:
     """Classify which OOM mechanism fired, in priority order: kernel OOM
     (most authoritative -- means the whole host was out of memory), then
     systemd-oomd (proactive, cgroup-scoped), then cgroup limit-only OOM,
-    else none found."""
+    else none found.
+
+    `all_sources_ok=False` means at least one underlying read failed
+    (permission denied, missing binary, timeout). A positive finding from
+    any *other* successfully-read source still stands (real evidence is
+    real evidence), but if none of the three sources found anything, that
+    must be reported as MECHANISM_DIAGNOSTIC_FAILED -- "we don't know" --
+    rather than the false reassurance of MECHANISM_NONE_FOUND, since an
+    unreadable journal looks identical to a genuinely empty one.
+    """
     if kernel_events:
         return OomPostmortemReport(
             mechanism=MECHANISM_KERNEL_OOM,
@@ -251,6 +306,11 @@ def diagnose(
             oomd_events=oomd_events,
             cgroup_events=cgroup_events,
         )
+    if not all_sources_ok:
+        return OomPostmortemReport(
+            mechanism=MECHANISM_DIAGNOSTIC_FAILED,
+            explanation=MECHANISM_EXPLANATIONS[MECHANISM_DIAGNOSTIC_FAILED],
+        )
     return OomPostmortemReport(
         mechanism=MECHANISM_NONE_FOUND,
         explanation=MECHANISM_EXPLANATIONS[MECHANISM_NONE_FOUND],
@@ -258,7 +318,8 @@ def diagnose(
 
 
 def diagnose_host(since: Optional[str] = None, runner=run) -> OomPostmortemReport:
-    kernel_events = get_kernel_oom_events(since=since, runner=runner)
-    oomd_events = get_oomd_events(since=since, runner=runner)
-    cgroup_events = find_cgroup_oom_events(runner=runner)
-    return diagnose(kernel_events, oomd_events, cgroup_events)
+    kernel_events, kernel_ok = get_kernel_oom_events(since=since, runner=runner)
+    oomd_events, oomd_ok = get_oomd_events(since=since, runner=runner)
+    cgroup_events, cgroup_ok = find_cgroup_oom_events(runner=runner)
+    all_ok = kernel_ok and oomd_ok and cgroup_ok
+    return diagnose(kernel_events, oomd_events, cgroup_events, all_sources_ok=all_ok)

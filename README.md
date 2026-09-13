@@ -103,7 +103,12 @@ sudo oom-postmortem --json                    # machine-readable output
 ```
 
 Exit code `0` = no OOM kill found in the window, `2` = an OOM kill was
-identified and attributed to a mechanism.
+identified and attributed to a mechanism, `3` = the check could not be
+completed at all (journalctl or the cgroupfs scan failed -- commonly a
+permission problem, e.g. the current user isn't in the
+`systemd-journal`/`adm` group; re-run as root or via `sudo`) -- this is a
+tooling failure, not a confirmed clean result, so treat it differently
+from `0` in scripts.
 
 ## If it finds a problem
 

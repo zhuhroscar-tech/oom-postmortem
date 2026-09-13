@@ -6,7 +6,7 @@ import json
 import sys
 
 from . import __version__
-from .core import diagnose_host, MECHANISM_NONE_FOUND
+from .core import diagnose_host, MECHANISM_DIAGNOSTIC_FAILED, MECHANISM_NONE_FOUND
 from .style import print_fields, resolve_style, status_headline
 
 
@@ -33,7 +33,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _print_text(report, style) -> None:
-    level = "ok" if report.mechanism == MECHANISM_NONE_FOUND else "fail"
+    if report.mechanism == MECHANISM_NONE_FOUND:
+        level = "ok"
+    elif report.mechanism == MECHANISM_DIAGNOSTIC_FAILED:
+        level = "warn"
+    else:
+        level = "fail"
     print(status_headline(style, level, report.mechanism))
     print(report.explanation)
     if report.kernel_events:
@@ -65,6 +70,8 @@ def main(argv=None) -> int:
 
     if report.mechanism == MECHANISM_NONE_FOUND:
         return 0
+    if report.mechanism == MECHANISM_DIAGNOSTIC_FAILED:
+        return 3
     return 2
 
 
