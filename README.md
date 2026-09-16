@@ -1,166 +1,53 @@
+[![English](https://img.shields.io/badge/English-555555?style=flat)](README.md) [![简体中文](https://img.shields.io/badge/简体中文-555555?style=flat)](README.zh-CN.md)
+
 # oom-postmortem
 
-[![CI](https://github.com/zhuhroscar-tech/oom-postmortem/actions/workflows/ci.yml/badge.svg)](https://github.com/zhuhroscar-tech/oom-postmortem/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/zhuhroscar-tech/oom-postmortem?include_prereleases&label=release)](https://github.com/zhuhroscar-tech/oom-postmortem/releases)
-![Linux](https://img.shields.io/badge/platform-Linux-111111?logo=linux)
+Inspect Linux OOM evidence from the kernel journal, systemd-oomd, and cgroup v2 counters in one read-only report. The CLI summarizes the mechanism it finds and includes supporting process or cgroup details, with JSON output for scripts.
 
-Determine which of several distinct OOM mechanisms killed a process on
-Linux — instead of manually correlating `journalctl -k`, `journalctl -u
-systemd-oomd`, and cgroup `memory.events` by hand.
+![Example terminal output](docs/images/example-output.png)
 
-## Simple explanation
+## Requirements and install
 
-When a program on a Linux server gets suddenly killed for using too
-much memory, there are actually three different systems that could
-have done it, and each one leaves evidence in a different log file.
-This tool checks all three places and tells you in plain language which
-one actually killed your process and why, so you fix the real cause
-instead of guessing. It's read-only — it never kills a process or
-changes any memory setting.
-
-## The problem
-
-"Something got OOM-killed" on a modern systemd/cgroup-v2 Linux host can
-mean at least three genuinely distinct mechanisms, each logged in a
-different place, each pointing to a different fix. A detailed 2026
-write-up (cr0x.net's *Ubuntu 24.04 OOM killer: prove it, fix it, prevent
-repeats*) walks the exact same multi-source manual correlation every
-time because no tool automates it:
-
-1. **The classic kernel OOM killer** — the kernel cannot satisfy an
-   allocation anywhere on the host and reclaim fails, so it scores every
-   process by `oom_badness()` and kills the worst offender. This means
-   *global* host-wide memory exhaustion. Evidence: `journalctl -k` /
-   `dmesg` shows "Out of memory: Killed process ...".
-2. **systemd-oomd** — a userspace daemon that watches PSI (pressure
-   stall information) per cgroup and proactively kills a whole
-   cgroup/unit *before* the kernel would ever fire, once sustained
-   pressure crosses a configured threshold. Evidence:
-   `journalctl -u systemd-oomd` shows "Killed ... due to memory pressure".
-3. **cgroup v2 memory-limit OOM** — a process is killed because its own
-   cgroup (a systemd unit's `MemoryMax=`, a container limit, a
-   Kubernetes pod's QoS-derived limit) was exceeded, even while the host
-   overall has plenty of free RAM. Evidence: that cgroup's
-   `memory.events` file shows its `oom_kill` counter incrementing, with
-   no host-wide kernel OOM log line at all.
-
-Getting this wrong means "fixing" the wrong layer (adding host RAM when
-it was actually a `MemoryMax=` limit, or tuning `OOMScoreAdjust` when
-`systemd-oomd`'s policy was the actual actor) and having the incident
-recur.
-
-## What this does
-
-![oom-postmortem example output](docs/images/example-output.png)
-
-```
-$ oom-postmortem --since "1 hour ago"
-
-Mechanism: kernel_oom
-The kernel's global OOM killer fired: it could not satisfy a memory
-allocation anywhere on the host and reclaim failed, so it scored every
-candidate process by oom_badness() and killed the worst offender. This
-means the whole host was under real memory pressure, not just one cgroup.
-
-Kernel OOM killer victims:
-  pid 1966928 (llama-server) oom_score_adj=200
-```
-
-Checked in priority order (most-authoritative first): kernel OOM killer,
-then systemd-oomd, then cgroup memory-limit OOM, else "no OOM kill
-found in this window."
-
-**Strictly read-only.** It never kills anything, never modifies
-`OOMScoreAdjust`, memory limits, or cgroup settings — it only reads
-journal and cgroupfs files.
-
-## Install
-
-Requires Python 3.9+ on a systemd/cgroup-v2 Linux host (uses
-`journalctl`/cgroupfs; meaningless on macOS/Windows or non-systemd
-distros).
+Requires Python 3.9+ on Linux with systemd, `journalctl`, and cgroup v2. macOS, Windows, and non-systemd hosts are not supported. Full journal and cgroup access may require elevated permissions.
 
 ```bash
-pip install oom-postmortem
-```
-
-Or run the standalone zipapp with no install:
-
-```bash
-curl -LO https://github.com/zhuhroscar-tech/oom-postmortem/releases/latest/download/oom-postmortem.pyz
-python3 oom-postmortem.pyz --version
-```
-
-Verify the download against `SHA256SUMS.txt` in the same release before
-running it.
-
-## Usage
-
-```bash
-sudo oom-postmortem                          # scan the whole available journal + cgroupfs
-sudo oom-postmortem --since "1 hour ago"      # narrow the journal window (journalctl --since syntax)
-sudo oom-postmortem --json                    # machine-readable output
-```
-
-Exit code `0` = no OOM kill found in the window, `2` = an OOM kill was
-identified and attributed to a mechanism, `3` = the check could not be
-completed at all (journalctl or the cgroupfs scan failed -- commonly a
-permission problem, e.g. the current user isn't in the
-`systemd-journal`/`adm` group; re-run as root or via `sudo`) -- this is a
-tooling failure, not a confirmed clean result, so treat it differently
-from `0` in scripts.
-
-## If it finds a problem
-
-This tool only diagnoses; it never modifies anything.
-
-- `kernel_oom` → this is global host memory exhaustion. Look at overall
-  memory usage/RSS across all processes at that time, not just the
-  victim; consider adding swap, reducing overall workload concurrency,
-  or capping non-critical processes with `OOMScoreAdjust`/cgroup limits
-  so the kernel has better victim choices next time.
-- `systemd_oomd` → check `ManagedOOMMemoryPressure=` and related policy
-  on the affected unit/slice; decide deliberately whether to protect it
-  or leave it killable, rather than being surprised by the "auto" default.
-- `cgroup_memory_limit` → find and adjust the specific `MemoryMax=` (or
-  container/pod memory limit) on that cgroup — adding host RAM will not
-  help a local limit.
-
-## Uninstall
-
-```bash
-pip uninstall oom-postmortem
-```
-No config files, no persistent state — a stateless read-only diagnostic.
-
-## Privacy / permissions
-
-- No network access, no telemetry.
-- Reads `journalctl -k`, `journalctl -u systemd-oomd`, and
-  `/sys/fs/cgroup/**/memory.events`. Full journal/cgroupfs access
-  typically requires root, same as any other use of these commands.
-- Writes nothing to disk.
-
-## Distro / architecture support
-
-Requires systemd and cgroup v2 (the vast majority of current distros;
-`systemd-oomd`-specific detection degrades gracefully to "no oomd
-events" on hosts without it running). Pure Python, no compiled
-dependencies.
-
-## Reproducible build / test
-
-```bash
-git clone https://github.com/zhuhroscar-tech/oom-postmortem
+git clone https://github.com/zhuhroscar-tech/oom-postmortem.git
 cd oom-postmortem
-python3 -m pip install -e .[dev]
-python3 -m pytest -v
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
 ```
 
-CI (`.github/workflows/ci.yml`) runs the suite on real Ubuntu runners
-across Python 3.9 and 3.12, then smoke-tests the console script and a
-standalone `.pyz` against real journal/cgroupfs state on the runner.
+A standalone `oom-postmortem.pyz` is available from [Releases](https://github.com/zhuhroscar-tech/oom-postmortem/releases). Verify it against the same release's `SHA256SUMS.txt`, then run it with Python 3; no pip installation is needed.
 
-## License
+## Quick start
 
-MIT — see [LICENSE](LICENSE).
+```bash
+oom-postmortem --since "1 hour ago"
+oom-postmortem --since "1 hour ago" --json
+python -m pytest -v
+```
+
+Without `--since`, the tool inspects the available journal and current cgroup counters. If permissions prevent inspection, use an account with journal access or deliberately rerun with elevated permissions, for example `sudo .venv/bin/oom-postmortem --since "1 hour ago"` from this checkout.
+
+Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | No OOM evidence found in the inspected sources |
+| `2` | OOM evidence found and classified; argparse also uses this for invalid arguments |
+| `3` | No positive finding and at least one source could not be read reliably |
+
+## Interpret the report
+
+Classification prioritizes kernel events, then systemd-oomd, then nonzero cgroup `oom_kill` counters. Review the evidence, not just the label: kernel victim lines alone do not necessarily distinguish global exhaustion from cgroup-limited OOM.
+
+`--since` filters journal entries only. cgroup counters are cumulative, have no event timestamps, and may reflect earlier incidents. The tool does not correlate a requested PID or unit, and its summary is not definitive attribution for every concurrent incident.
+
+For follow-up, inspect host memory pressure, the unit's `ManagedOOMMemoryPressure=` policy, or its `MemoryMax=`/container limit as appropriate. Do not change limits based solely on the summary.
+
+## Safety
+
+No process killing, configuration changes, persistent state, network access, or telemetry. It reads evidence only; missing logs or removed cgroups can limit diagnosis. See [CI](.github/workflows/ci.yml) for Linux tests and artifact builds.
+
+[MIT license](LICENSE).
