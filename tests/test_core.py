@@ -32,6 +32,17 @@ OOMD_SAMPLE = (
     "/system.slice being 63.30% > 50.00% for > 20s with reclaim activity\n"
 )
 
+# Current mainline systemd (253+) wording for the pressure-triggered kill
+# path (src/oom/oomd-manager.c) -- distinct from the legacy "Killed X due
+# to memory pressure" wording above. Confirmed against real 2024/2025 user
+# journal excerpts (systemd/systemd#43106) and the current upstream source.
+OOMD_SAMPLE_CURRENT_WORDING = (
+    "2026-09-19T05:00:00+0000 host systemd-oomd[62078]: Marked "
+    "/user.slice/user-1000.slice/user@1000.service/app.slice/run-p1.service "
+    "for killing due to memory pressure for /user.slice/user-1000.slice/"
+    "user@1000.service being 36.66% > 20.00% for > 5s with reclaim activity\n"
+)
+
 MEMORY_EVENTS_SAMPLE = "low 0\nhigh 3\nmax 5\noom 1\noom_kill 2\noom_group_kill 0\n"
 MEMORY_EVENTS_SAMPLE_ZERO = "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n"
 
@@ -83,6 +94,35 @@ def test_parse_oomd_journal():
     events = parse_oomd_journal(OOMD_SAMPLE)
     assert len(events) == 1
     assert events[0].unit_or_cgroup == "/system.slice/myservice.service"
+
+
+def test_parse_oomd_journal_current_systemd_wording():
+    # Real bug found 2026-09-19: current mainline systemd-oomd (253+)
+    # emits "Marked X for killing due to memory pressure..." for the
+    # pressure-triggered kill path, not the legacy "Killed X due to
+    # memory pressure..." wording. Before this fix, _OOMD_KILL_RE only
+    # matched the legacy wording, so a host running current systemd-oomd
+    # that killed something via memory pressure produced zero parsed
+    # events here -- silently degrading diagnose_host() to
+    # MECHANISM_NONE_FOUND (a false "nothing happened" on the exact
+    # scenario this tool exists to catch).
+    events = parse_oomd_journal(OOMD_SAMPLE_CURRENT_WORDING)
+    assert len(events) == 1
+    assert events[0].unit_or_cgroup == (
+        "/user.slice/user-1000.slice/user@1000.service/app.slice/run-p1.service"
+    )
+
+
+def test_diagnose_falls_back_to_oomd_current_wording():
+    # End-to-end: the current-wording journal line must still classify
+    # as MECHANISM_SYSTEMD_OOMD, not silently fall through to
+    # MECHANISM_NONE_FOUND.
+    report = diagnose(
+        kernel_events=[],
+        oomd_events=parse_oomd_journal(OOMD_SAMPLE_CURRENT_WORDING),
+        cgroup_events=[],
+    )
+    assert report.mechanism == MECHANISM_SYSTEMD_OOMD
 
 
 def test_get_oomd_events_uses_runner():

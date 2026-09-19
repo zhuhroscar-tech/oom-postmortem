@@ -160,7 +160,11 @@ def get_kernel_oom_events(since: Optional[str] = None, runner=run) -> tuple:
     return parse_kernel_oom_journal(text), True
 
 
-_OOMD_KILL_RE = re.compile(r"Killed (\S+) due to memory pressure", re.IGNORECASE)
+_OOMD_KILL_RE = re.compile(
+    r"(?:Killed (?P<legacy_target>\S+) due to memory pressure"
+    r"|Marked (?P<current_target>\S+) for killing due to memory pressure)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -170,12 +174,24 @@ class OomdEvent:
 
 
 def parse_oomd_journal(text: str) -> list:
-    """Parse `journalctl -u systemd-oomd` output for kill actions."""
+    """Parse `journalctl -u systemd-oomd` output for kill actions.
+
+    Matches both the legacy wording ("Killed X due to memory pressure...",
+    still emitted in some code paths/older systemd versions) and the
+    current mainline wording used since systemd 253+ for the
+    pressure-triggered kill path ("Marked X for killing due to memory
+    pressure..." -- see src/oom/oomd-manager.c's mem_pressure kill
+    handler). Without matching the current wording, this tool silently
+    reported MECHANISM_NONE_FOUND/DIAGNOSTIC_FAILED on any host running a
+    modern systemd-oomd that killed via pressure, even though the journal
+    line was right there.
+    """
     events = []
     for line in text.splitlines():
         m = _OOMD_KILL_RE.search(line)
         if m:
-            events.append(OomdEvent(unit_or_cgroup=m.group(1), raw_line=line))
+            target = m.group("legacy_target") or m.group("current_target")
+            events.append(OomdEvent(unit_or_cgroup=target, raw_line=line))
     return events
 
 
