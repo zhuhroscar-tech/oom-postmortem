@@ -18,7 +18,7 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
-[Releases](https://github.com/zhuhroscar-tech/oom-postmortem/releases) 提供独立的 `oom-postmortem.pyz`。请先核对同一 release 中的 `SHA256SUMS.txt`，再使用 Python 3 运行，无需 pip 安装。
+[Releases](https://github.com/zhuhroscar-tech/oom-postmortem/releases) 提供独立的 `oom-postmortem.pyz`。请先核对同一 release 中的 `SHA256SUMS.txt`，再使用 Python 3 运行，无需 pip 安装。发布历史记录在 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 快速上手
 
