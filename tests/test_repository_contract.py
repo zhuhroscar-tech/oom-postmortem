@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CURRENT_VERSION = "0.1.7"
+CURRENT_VERSION = "0.1.8"
 
 
 def _read(relative_path: str) -> str:
@@ -50,12 +50,22 @@ def test_changelog_tracks_current_version_and_initial_release():
 def test_ci_builds_and_smokes_downloadable_artifacts():
     ci = _read(".github/workflows/ci.yml")
 
+    assert re.search(r"tags:\s*\[\s*['\"]?v\*['\"]?\s*\]", ci)
     assert "python -m pytest" in ci
     assert "python -m build" in ci
     assert "dist/oom-postmortem.pyz" in ci
     assert "oom-postmortem --version" in ci
     assert "SHA256SUMS.txt" in ci
     assert "actions/upload-artifact" in ci
+
+
+def test_package_metadata_links_project_resources():
+    pyproject = _read("pyproject.toml")
+
+    assert "[project.urls]" in pyproject
+    assert "Homepage = \"https://github.com/zhuhroscar-tech/oom-postmortem\"" in pyproject
+    assert "Issues = \"https://github.com/zhuhroscar-tech/oom-postmortem/issues\"" in pyproject
+    assert "Changelog = \"https://github.com/zhuhroscar-tech/oom-postmortem/blob/main/CHANGELOG.md\"" in pyproject
 
 
 def test_codeql_scans_python_on_main_and_schedule():

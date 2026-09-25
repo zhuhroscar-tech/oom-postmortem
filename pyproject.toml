@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oom-postmortem"
-version = "0.1.7"
+version = "0.1.8"
 description = "Determine which of several distinct OOM mechanisms killed a process: kernel OOM killer, systemd-oomd, or cgroup memory-limit kill."
 readme = "README.md"
 license = "MIT"
@@ -15,6 +15,11 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Operating System :: POSIX :: Linux",
 ]
+
+[project.urls]
+Homepage = "https://github.com/zhuhroscar-tech/oom-postmortem"
+Issues = "https://github.com/zhuhroscar-tech/oom-postmortem/issues"
+Changelog = "https://github.com/zhuhroscar-tech/oom-postmortem/blob/main/CHANGELOG.md"
 
 [project.scripts]
 oom-postmortem = "oom_postmortem.cli:main"

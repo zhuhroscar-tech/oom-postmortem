@@ -2,6 +2,12 @@
 
 All notable source-quality changes to `oom-postmortem` are documented here.
 
+## v0.1.8 - 2026-09-25
+
+- Made CI run explicitly on `v*` release tags so release artifacts are validated from the tag being published.
+- Added package project URLs for homepage, issues, and changelog metadata.
+- Added repository-contract coverage for tag-triggered release validation and package resource links.
+
 ## v0.1.7 - 2026-09-24
 
 - Added this changelog and README release-history links.
